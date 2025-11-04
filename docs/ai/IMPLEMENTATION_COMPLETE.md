@@ -57,7 +57,7 @@ All code is in: `/Users/mehmetimga/ai-poker/poker-anomalies/poker-pipeline/`
    - Dependency verification
    - Graceful cleanup
 
-9. **✅ Test Suite** (`scripts/test_filters.py`)
+9. **✅ Test Suite** (`tests/test_filters.py`)
    - 5 comprehensive tests
    - **All tests passing** ✅
 
@@ -102,7 +102,7 @@ python3 -m src.producer --delay 0.3
 ### Run Tests
 ```bash
 cd /Users/mehmetimga/ai-poker/poker-anomalies/poker-pipeline
-python3 scripts/test_filters.py
+python3 tests/test_filters.py
 ```
 
 **Result**: ✅ ALL TESTS PASSED

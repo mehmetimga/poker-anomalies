@@ -151,7 +151,7 @@ Complete pipeline orchestration:
 - Colored console output
 - Error handling at each step
 
-#### 9. Testing (`scripts/test_filters.py`) ✅
+#### 9. Testing (`tests/test_filters.py`) ✅
 Comprehensive filter validation:
 
 **Test Suite:**
@@ -236,8 +236,9 @@ poker-pipeline/
 ├── logs/
 │   └── anomalies.log           ✅ (generated at runtime)
 │
-└── scripts/
-    ├── run_local.sh            ✅ Full pipeline automation
+├── scripts/
+│   └── run_local.sh            ✅ Full pipeline automation
+└── tests/
     └── test_filters.py         ✅ Test suite (all passing)
 ```
 
@@ -245,7 +246,7 @@ poker-pipeline/
 
 ### Unit Tests
 ```bash
-python3 scripts/test_filters.py
+python3 tests/test_filters.py
 ```
 **Status**: ✅ ALL TESTS PASSED
 - Simple Kalman ✅
