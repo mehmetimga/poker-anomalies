@@ -49,9 +49,16 @@ def measurement_model(x):
     """
     x_flat = x.flatten()
 
+    # Clip velocity to prevent exponential overflow
+    # Velocity factor limited to reasonable range [-5, 5] -> exp range [0.006, 148]
+    velocity_clipped = np.clip(x_flat[1] / 10.0, -5.0, 5.0)
+
     # Measurement is position scaled by exponential velocity factor
     # This captures non-linear relationship between state and observation
-    measurement = x_flat[0] * np.exp(x_flat[1] / 10.0)
+    measurement = x_flat[0] * np.exp(velocity_clipped)
+
+    # Clip measurement to prevent extreme values
+    measurement = np.clip(measurement, -1e6, 1e6)
 
     return np.array([[measurement]])
 

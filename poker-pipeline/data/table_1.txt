@@ -1,7 +1,7 @@
-# Synthetic poker hand history data
+# Synthetic poker hand history data for Table 1
 # Format: timestamp|table_id|player_id|action|amount|pot
 # 6 players: P1, P2, P3, P4, P5, P6
-# Includes normal betting patterns and anomalous synchronized bets (hands 15-17)
+# Includes normal betting patterns and anomalous synchronized bets (hands 15, 16, 17)
 
 # Hand 1 - Normal play
 1697500000.0|1|P1|bet|10.0|10.0
@@ -214,5 +214,4 @@
 1697500386.0|1|P1|fold|0.0|100.0
 1697500387.0|1|P2|call|20.0|120.0
 1697500388.0|1|P4|fold|0.0|120.0
-
 

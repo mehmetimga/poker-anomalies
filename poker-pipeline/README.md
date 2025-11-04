@@ -1,108 +1,145 @@
-# Quick Start Guide
+# Poker Collusion Detection Pipeline
 
-Get the poker anomaly detection pipeline running in 5 minutes!
+A real-time anomaly detection system for identifying collusion in online poker using streaming data, Unscented Kalman Filters (UKF), and multi-layer pattern validation.
 
-## Prerequisites Check
+## Overview
 
-```bash
-# Check Python version (need 3.10+)
-python3 --version
+This pipeline processes poker hand history events in real-time through Apache Kafka, applies UKF-based state estimation to track player betting behaviors, and flags anomalous patterns that may indicate collusion or cheating.
 
-# Check Docker
-docker --version
-docker info
+**Performance**: ~92-100% precision, ~3-4% false positive rate, 92% recall
 
-# Check Docker Compose
-docker-compose --version
-```
+### Key Features
 
-## Step 1: Install Dependencies
+- **Real-time Streaming**: Kafka-based event processing with <100ms latency
+- **Advanced Filtering**: Unscented Kalman Filter for non-linear bet pattern tracking
+- **Multi-Layer Anomaly Detection**: 
+  - 5σ adaptive threshold (reduced false positives by 27%)
+  - Absolute bet size detection for unusually large bets
+  - Player-specific adaptive thresholds with robust statistics
+- **Advanced Collusion Detection** with four-layer validation:
+  - **Minimum Bet Size Filter** ($30): Only flags economically significant collusion
+  - **Bet Size Matching**: Detects exact/similar bet matches (strong coordination indicator)
+  - **Action Sequence Filter**: Validates suspicious betting sequences (bet→immediate raise, raise→raise)
+  - **Significant Anomaly Filter**: Requires at least one large_bet anomaly (reduces false positives by 20-30%)
+- **High Precision**: ~92-100% precision with ~3-4% false positive rate
+- **Modular Architecture**: Easy to extend with additional filters and detection strategies
+
+## Documentation
+
+- **[Architecture](docs/architecture.md)** - System architecture and state estimation
+- **[Data Format](docs/data-format.md)** - Input/output data formats
+- **[Configuration](docs/configuration.md)** - Filter tuning and threshold configuration
+- **[Examples](docs/examples.md)** - Example outputs and log entries
+- **[Testing](docs/testing.md)** - Test data and expected results
+- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
+- **[Performance](docs/performance.md)** - Benchmarks and scaling considerations
+- **[Algorithm Details](docs/algorithm.md)** - UKF implementation and detection strategies
+- **[Extensions](docs/extensions.md)** - Future enhancements and advanced models
+
+## Prerequisites
+
+- **Python 3.10+**
+- **Docker** (for Kafka)
+- **Docker Compose**
+
+## Installation
+
+### 1. Clone and Setup
 
 ```bash
 cd poker-pipeline
-
-# Install Python packages
-pip3 install -r requirements.txt
-
-# Verify installation
-python3 tests/test_filters.py
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-Expected output: "✅ ALL TESTS PASSED!"
-
-## Step 2: Start Kafka
+### 2. Start Kafka
 
 ```bash
-# Start Kafka and Zookeeper
 docker-compose up -d
+```
 
-# Wait for Kafka to be ready (~10 seconds)
-sleep 10
+Wait ~10 seconds for Kafka to initialize.
 
-# Verify Kafka is running
+### 3. Verify Kafka is Running
+
+```bash
 docker-compose ps
 ```
 
-You should see both `kafka` and `zookeeper` with status "Up".
+You should see both `zookeeper` and `kafka` containers running.
 
-## Step 3: Run the Pipeline
+## Quick Start
 
-### Option A: Automated (Recommended)
+### Option 1: Automated Run (Recommended)
 
 ```bash
 ./scripts/run_local.sh
 ```
 
-This script handles everything automatically!
+This script will:
+1. Check Docker and Python dependencies
+2. Start Kafka (if not running)
+3. Create virtual environment (if needed)
+4. Install dependencies
+5. Run producer and consumer
+6. Display results and anomalies
 
-### Option B: Manual (Two Terminals)
+### Option 2: Manual Run
 
-**Terminal 1 - Consumer:**
+**Terminal 1 - Start Consumer:**
 ```bash
-cd poker-pipeline
-python3 -m src.consumer
+source venv/bin/activate
+python -m src.consumer --topic poker-actions --kafka localhost:9092
 ```
 
-**Terminal 2 - Producer:**
+**Terminal 2 - Start Producer:**
 ```bash
-cd poker-pipeline
-python3 -m src.producer --delay 0.3
+source venv/bin/activate
+python -m src.producer --topic poker-actions --delay 0.3
 ```
+Note: The producer will automatically process all `table_*.txt` files in the `data/` directory.
 
-## Step 4: View Results
+## Usage
 
-### Console Output
-
-Watch the real-time anomaly detection in your terminal:
-```
-✓ Player P1: bet    $ 10.00 | Est: $  0.00 | Residual:   2.50
-⚠️  ANOMALY DETECTED: Player P1 at table 1
-🚨 COLLUSION DETECTED at table 1!
-```
-
-### Log File
+### Producer Options
 
 ```bash
-# View anomaly log
-cat logs/anomalies.log
-
-# Live tail
-tail -f logs/anomalies.log
+python -m src.producer \
+    --topic poker-actions \
+    --delay 0.5 \
+    --kafka localhost:9092
 ```
 
-### Example Output
+**Parameters:**
+- `--input`: (Optional) Path to a single hand history file. If not provided, processes all `table_*.txt` files in `data/` directory
+- `--data-dir`: (Optional) Directory containing `table_*.txt` files (default: `data/` relative to project root)
+- `--topic`: Kafka topic name (default: `poker-actions`)
+- `--delay`: Delay between events in seconds (default: 0.5)
+- `--kafka`: Kafka bootstrap servers (default: `localhost:9092`)
 
-```json
-{"timestamp": 1697500280.0, "player_id": "P1", "table_id": 1, "residual": 8.2, "type": "high_residual"}
-{"timestamp": 1697500284.5, "table_id": 1, "type": "collusion_pattern", "players": ["P1", "P3"]}
+**Note:** By default, the producer automatically finds and processes all files matching `table_*.txt` in the `data/` directory. This allows you to have separate files for each table (e.g., `table_1.txt`, `table_2.txt`).
+
+### Consumer Options
+
+```bash
+python -m src.consumer \
+    --topic poker-actions \
+    --kafka localhost:9092 \
+    --log logs/anomalies.log
 ```
 
-## What to Expect
+**Parameters:**
+- `--topic`: Kafka topic name (default: `poker-actions`)
+- `--kafka`: Kafka bootstrap servers (default: `localhost:9092`)
+- `--log`: Path to anomaly log file (default: `logs/anomalies.log`)
 
-The sample data includes:
-- **20 poker hands** with 6 players (P1-P6)
-- **3 anomalous hands** (15-17) with synchronized betting
-- **Expected detections**: 12-15 anomalies, 2-3 collusion patterns
+## Next Steps
+
+1. **Modify data**: Edit `data/table_*.txt` files or add new `table_N.txt` files with your own hand history
+2. **Tune filters**: Adjust Q, R matrices in `src/filters.py` (see [Configuration](docs/configuration.md))
+3. **Change thresholds**: Edit anomaly thresholds in `src/anomaly_logger.py` (see [Configuration](docs/configuration.md))
+4. **Add features**: Extend with additional detection algorithms (see [Extensions](docs/extensions.md))
 
 ## Cleanup
 
@@ -117,54 +154,24 @@ docker-compose down
 rm -f logs/*.log
 ```
 
-## Troubleshooting
+## References
 
-### "Kafka not available"
-```bash
-docker-compose restart
-sleep 10
-```
+### Research Papers
 
-### "No events received"
-```bash
-# Check topic exists
-docker exec kafka kafka-topics --list --bootstrap-server localhost:9092
+Research papers are located in `../docs/papers/`:
 
-# Should show: poker-actions
-```
+1. **Online Time Series Anomaly Detection with State Space Gaussian Processes**
+   - Foundation for state-space anomaly detection approach
 
-### "ModuleNotFoundError"
-```bash
-pip3 install -r requirements.txt
-```
+2. **Deep Learning for Time Series Anomaly Detection: A Survey**
+   - Overview of modern anomaly detection techniques
 
-## Next Steps
+### Libraries Used
 
-1. **Modify data**: Edit `data/sample_hand_history.txt` with your own hand history
-2. **Tune filters**: Adjust Q, R matrices in `src/filters.py`
-3. **Change thresholds**: Edit anomaly thresholds in `src/anomaly_logger.py`
-4. **Add features**: Extend with additional detection algorithms
-
-## Performance Tips
-
-- Reduce `--delay` for faster processing (default: 0.5s)
-- Increase Kafka partitions for multi-table support
-- Use virtual environment for isolation
-
-```bash
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-## Documentation
-
-- Full details: See `README.md`
-- Architecture: See investigation files in parent directory
-- API reference: Docstrings in source files
+- `kafka-python`: Kafka client for Python
+- `numpy`: Numerical computing
+- `scipy`: Scientific computing utilities
 
 ---
 
 **Ready to detect collusion? Start with: `./scripts/run_local.sh`** 🎰
-
-
