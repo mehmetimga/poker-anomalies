@@ -57,17 +57,17 @@ if [ ! -f "docker-compose.yml" ]; then
 fi
 
 # Start Kafka in detached mode
-docker-compose up -d
+docker compose up -d
 
 print_status "Waiting for Kafka to be ready..."
 sleep 10
 
 # Check if Kafka is running
-if docker-compose ps | grep -q "kafka.*Up"; then
+if docker compose ps | grep -q "kafka.*Up"; then
     print_status "Kafka is running"
 else
     print_error "Kafka failed to start"
-    docker-compose logs
+    docker compose logs
     exit 1
 fi
 echo ""
@@ -137,7 +137,7 @@ cleanup() {
     
     echo "=========================================="
     echo "Pipeline stopped"
-    echo "To stop Kafka: docker-compose down"
+    echo "To stop Kafka: docker compose down"
     echo "=========================================="
 }
 
@@ -165,7 +165,7 @@ echo "Pipeline Execution Complete!"
 echo "=========================================="
 echo "Check logs/anomalies.log for detected anomalies"
 echo ""
-echo "To stop Kafka, run: docker-compose down"
+echo "To stop Kafka, run: docker compose down"
 echo "=========================================="
 
 

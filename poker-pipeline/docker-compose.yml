@@ -1,8 +1,8 @@
-version: '3.8'
+name: poker-anomalies
 
 services:
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
+    image: confluentinc/cp-zookeeper:7.9.4
     hostname: zookeeper
     container_name: zookeeper
     ports:
@@ -12,7 +12,7 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
-    image: confluentinc/cp-kafka:7.4.0
+    image: confluentinc/cp-kafka:7.9.4
     hostname: kafka
     container_name: kafka
     depends_on:
@@ -32,5 +32,3 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
       KAFKA_JMX_PORT: 9101
       KAFKA_JMX_HOSTNAME: localhost
-
-
