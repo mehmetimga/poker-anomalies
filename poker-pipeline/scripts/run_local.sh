@@ -150,9 +150,9 @@ python3 -m src.consumer --topic poker-actions --kafka localhost:9092 &
 CONSUMER_PID=$!
 sleep 3
 
-# Start Producer
+# Start Producer (processes all table_*.txt files in data/ directory)
 print_status "Starting Producer..."
-python3 -m src.producer --input data/sample_hand_history.txt --topic poker-actions --delay 0.3 --kafka localhost:9092
+python3 -m src.producer --topic poker-actions --delay 0.3 --kafka localhost:9092
 
 # Wait for consumer to finish processing
 echo ""

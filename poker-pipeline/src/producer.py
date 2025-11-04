@@ -1,11 +1,15 @@
 """
 Kafka producer for streaming poker hand history events.
-Reads hand history file and publishes events to Kafka topic.
+Reads hand history files and publishes events to Kafka topic.
+Supports multiple table files (table_*.txt) in the data directory.
 """
 
 import json
 import time
 import sys
+import os
+import glob
+from pathlib import Path
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 
@@ -79,30 +83,24 @@ def create_producer(bootstrap_servers="localhost:9092", max_retries=10, retry_de
                 raise
 
 
-def produce_events(
-    input_file, topic="poker-actions", delay=0.5, bootstrap_servers="localhost:9092"
+def produce_events_from_file(
+    input_file, producer, topic, delay, events_sent, events_failed
 ):
     """
-    Read hand history and produce events to Kafka.
+    Read a single hand history file and produce events to Kafka.
 
     Parameters:
         input_file: Path to hand history file
+        producer: KafkaProducer instance
         topic: Kafka topic name
         delay: Delay between events (seconds) to simulate real-time
-        bootstrap_servers: Kafka broker address
+        events_sent: Current count of events sent (will be updated)
+        events_failed: Current count of events failed (will be updated)
+
+    Returns:
+        tuple: (events_sent, events_failed) - updated counts
     """
-    print(f"Starting Kafka Producer")
-    print(f"Input file: {input_file}")
-    print(f"Topic: {topic}")
-    print(f"Delay: {delay}s per event")
-    print("-" * 60)
-
-    # Create producer with retry logic
-    producer = create_producer(bootstrap_servers)
-
-    events_sent = 0
-    events_failed = 0
-
+    file_events = 0
     try:
         with open(input_file, "r") as f:
             for line_num, line in enumerate(f, 1):
@@ -119,11 +117,12 @@ def produce_events(
                     record_metadata = future.get(timeout=10)
 
                     events_sent += 1
+                    file_events += 1
 
                     # Print progress
                     if events_sent % 10 == 0:
                         print(
-                            f"Sent {events_sent} events... (latest: {event['player_id']} {event['action']} ${event['amount']:.2f})"
+                            f"Sent {events_sent} events... (latest: {event['player_id']} {event['action']} ${event['amount']:.2f} from {os.path.basename(input_file)})"
                         )
 
                     # Simulate real-time delay
@@ -131,7 +130,111 @@ def produce_events(
 
                 except Exception as e:
                     events_failed += 1
-                    print(f"✗ Error sending event on line {line_num}: {e}")
+                    print(
+                        f"✗ Error sending event from {input_file} line {line_num}: {e}"
+                    )
+
+        print(f"✓ Processed {file_events} events from {os.path.basename(input_file)}")
+
+    except FileNotFoundError:
+        print(f"✗ Error: Input file not found: {input_file}")
+        events_failed += 1
+    except Exception as e:
+        print(f"✗ Error reading file {input_file}: {e}")
+        events_failed += 1
+
+    return events_sent, events_failed
+
+
+def produce_events(
+    data_dir=None,
+    input_file=None,
+    topic="poker-actions",
+    delay=0.5,
+    bootstrap_servers="localhost:9092",
+):
+    """
+    Read hand history files and produce events to Kafka.
+    Can process either:
+    - All table_*.txt files in a directory (if data_dir is provided)
+    - A single file (if input_file is provided)
+
+    Parameters:
+        data_dir: Directory containing table_*.txt files (default: None)
+        input_file: Path to single hand history file (default: None, overrides data_dir)
+        topic: Kafka topic name
+        delay: Delay between events (seconds) to simulate real-time
+        bootstrap_servers: Kafka broker address
+    """
+    print(f"Starting Kafka Producer")
+    print(f"Topic: {topic}")
+    print(f"Delay: {delay}s per event")
+    print("-" * 60)
+
+    # Create producer with retry logic
+    producer = create_producer(bootstrap_servers)
+
+    events_sent = 0
+    events_failed = 0
+
+    try:
+        # Determine which files to process
+        files_to_process = []
+
+        if input_file:
+            # Single file mode (backward compatibility)
+            if os.path.exists(input_file):
+                files_to_process = [input_file]
+                print(f"Processing single file: {input_file}")
+            else:
+                print(f"✗ Error: Input file not found: {input_file}")
+                sys.exit(1)
+        elif data_dir:
+            # Directory mode - find all table_*.txt files
+            data_path = Path(data_dir)
+            if not data_path.exists():
+                print(f"✗ Error: Data directory not found: {data_dir}")
+                sys.exit(1)
+
+            # Find all files matching table_*.txt pattern
+            pattern = str(data_path / "table_*.txt")
+            files_to_process = sorted(glob.glob(pattern))
+
+            if not files_to_process:
+                print(f"⚠️  No table_*.txt files found in {data_dir}")
+                print(f"   Looking for files matching: {pattern}")
+                sys.exit(1)
+
+            print(f"Found {len(files_to_process)} table file(s):")
+            for f in files_to_process:
+                print(f"  - {os.path.basename(f)}")
+        else:
+            # Default: look in data/ directory relative to script location
+            script_dir = Path(__file__).parent.parent
+            default_data_dir = script_dir / "data"
+            pattern = str(default_data_dir / "table_*.txt")
+            files_to_process = sorted(glob.glob(pattern))
+
+            if not files_to_process:
+                print(f"✗ Error: No table_*.txt files found in {default_data_dir}")
+                print(
+                    f"   Please provide --input or --data-dir, or add table_*.txt files to data/"
+                )
+                sys.exit(1)
+
+            print(
+                f"Found {len(files_to_process)} table file(s) in default data directory:"
+            )
+            for f in files_to_process:
+                print(f"  - {os.path.basename(f)}")
+
+        print("-" * 60)
+
+        # Process each file
+        for input_file in files_to_process:
+            events_sent, events_failed = produce_events_from_file(
+                input_file, producer, topic, delay, events_sent, events_failed
+            )
 
         # Send END_STREAM signal
         end_event = {"type": "END_STREAM", "timestamp": time.time()}
@@ -140,14 +243,12 @@ def produce_events(
 
         print("\n" + "-" * 60)
         print(f"✓ Producer finished")
+        print(f"  Files processed: {len(files_to_process)}")
         print(f"  Events sent: {events_sent}")
         print(f"  Events failed: {events_failed}")
         print(f"  END_STREAM signal sent")
         print("-" * 60)
 
-    except FileNotFoundError:
-        print(f"✗ Error: Input file not found: {input_file}")
-        sys.exit(1)
     except KeyboardInterrupt:
         print("\n⚠️  Producer interrupted by user")
     finally:
@@ -158,12 +259,17 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Kafka producer for poker hand history"
+        description="Kafka producer for poker hand history. Processes all table_*.txt files in data directory by default."
     )
     parser.add_argument(
         "--input",
-        default="data/sample_hand_history.txt",
-        help="Input hand history file (default: data/sample_hand_history.txt)",
+        default=None,
+        help="Input hand history file (optional, overrides --data-dir). Default: process all table_*.txt files in data/",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Directory containing table_*.txt files (default: data/ relative to project root)",
     )
     parser.add_argument(
         "--topic",
@@ -185,6 +291,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     produce_events(
+        data_dir=args.data_dir,
         input_file=args.input,
         topic=args.topic,
         delay=args.delay,

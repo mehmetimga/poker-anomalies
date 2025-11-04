@@ -81,14 +81,21 @@ def consume_and_detect(
     # Create consumer
     consumer = create_consumer(topic, bootstrap_servers)
 
-    # Initialize anomaly logger
-    anomaly_logger = AnomalyLogger(log_file=log_file, console_output=True)
-
     # Initialize collusion detector
     collusion_detector = CollusionDetector()
 
-    # Dictionary of player filters {player_id: PokerUKF}
+    # Initialize anomaly logger with collusion detector
+    anomaly_logger = AnomalyLogger(
+        log_file=log_file, console_output=True, collusion_detector=collusion_detector
+    )
+
+    # Dictionary of player filters {(table_id, player_id): PokerUKF}
+    # Each table has independent filter state for each player
     player_filters = {}
+
+    # Track active players per table (for collusion detector)
+    # Format: {table_id: set([player_id, ...])}
+    active_players_by_table = {}
 
     # Statistics
     events_processed = 0
@@ -110,45 +117,93 @@ def consume_and_detect(
 
             # Process event
             player_id = event["player_id"]
+            table_id = event["table_id"]
 
-            # Initialize player filter if new
-            if player_id not in player_filters:
-                player_filters[player_id] = PokerUKF(
+            # Track active players at table
+            if table_id not in active_players_by_table:
+                active_players_by_table[table_id] = set()
+            active_players_by_table[table_id].add(player_id)
+
+            # Create unique key for this table+player combination
+            filter_key = (table_id, player_id)
+
+            # Initialize player filter if new (per table)
+            if filter_key not in player_filters:
+                player_filters[filter_key] = PokerUKF(
                     player_id=player_id,
                     process_model=process_model,
                     measurement_model=measurement_model,
                 )
-                print(f"✓ Initialized filter for player {player_id}")
+                print(
+                    f"✓ Initialized filter for player {player_id} at table {table_id}"
+                )
 
-            # Get player's filter
-            player_ukf = player_filters[player_id]
+            # Get player's filter for this table
+            player_ukf = player_filters[filter_key]
+
+            # Track action for sequence analysis (all actions, not just anomalies)
+            anomaly_logger.track_action(event)
 
             # Process event through UKF
             result = player_ukf.process_event(event)
 
             events_processed += 1
 
+            # Check if warm-up is complete (need enough samples before detecting anomalies)
+            warm_up_complete = player_ukf.is_warm_up_complete()
+
             # Get adaptive threshold for this player
             threshold = player_ukf.get_adaptive_threshold(default_std=2.0)
 
-            # Check for anomaly
-            is_anomaly = anomaly_logger.check_anomaly(result["residual"], threshold)
+            # Check for anomaly based on residual
+            residual_anomaly = False
+            if warm_up_complete:
+                residual_anomaly = anomaly_logger.check_anomaly(
+                    result["residual"], threshold
+                )
+
+            # Check for absolute bet size anomaly (large bets that might indicate collusion)
+            absolute_bet_anomaly = False
+            if event["action"] in ["bet", "raise"] and warm_up_complete:
+                bet_amount = float(event.get("amount", 0))
+                if bet_amount > 0:
+                    absolute_threshold = player_ukf.get_absolute_bet_threshold()
+                    if bet_amount >= absolute_threshold:
+                        absolute_bet_anomaly = True
+
+            # Anomaly if either residual or absolute bet size is anomalous
+            is_anomaly = residual_anomaly or absolute_bet_anomaly
+
+            # Determine anomaly type
+            anomaly_type = "high_residual"
+            if absolute_bet_anomaly and residual_anomaly:
+                anomaly_type = "large_bet_high_residual"
+            elif absolute_bet_anomaly:
+                anomaly_type = "large_bet"
+                # Use absolute bet threshold as the threshold for logging
+                threshold = player_ukf.get_absolute_bet_threshold()
 
             # Print processing info
             status = "⚠️ ANOMALY" if is_anomaly else "✓"
+            warm_up_status = "" if warm_up_complete else " [WARM-UP]"
             print(
                 f"{status} Player {player_id}: {event['action']:6s} ${event.get('amount', 0):6.2f} | "
                 f"Est: ${result['estimate']:6.2f} | Residual: {result['residual']:6.2f} | "
-                f"Threshold: {threshold:.2f}"
+                f"Threshold: {threshold:.2f}{warm_up_status}"
             )
 
             # Log if anomaly detected
             if is_anomaly:
+                # Update active players in logger before logging anomaly
+                anomaly_logger.active_players[table_id].update(
+                    active_players_by_table[table_id]
+                )
+
                 anomaly_logger.log_anomaly(
                     event=event,
                     residual=result["residual"],
                     threshold=threshold,
-                    anomaly_type="high_residual",
+                    anomaly_type=anomaly_type,
                 )
                 anomalies_detected += 1
 
@@ -168,18 +223,29 @@ def consume_and_detect(
         # Print anomaly summary
         anomaly_logger.print_summary()
 
-        # Print player statistics
+        # Print player statistics (grouped by table)
         print("\nPLAYER STATISTICS")
         print("-" * 60)
-        for player_id, ukf in sorted(player_filters.items()):
-            stats = ukf.get_statistics()
-            print(f"\nPlayer {player_id}:")
-            print(
-                f"  State: position={stats['state'][0]:.2f}, velocity={stats['state'][1]:.2f}"
-            )
-            print(f"  Avg bet: ${stats['avg_bet']:.2f}")
-            print(f"  Std residual: {stats['std_residual']:.2f}")
-            print(f"  Hands played: {len(stats['bet_history'])}")
+
+        # Group filters by table
+        by_table = {}
+        for (table_id, player_id), ukf in player_filters.items():
+            if table_id not in by_table:
+                by_table[table_id] = []
+            by_table[table_id].append((player_id, ukf))
+
+        # Print stats per table
+        for table_id in sorted(by_table.keys()):
+            print(f"\nTable {table_id}:")
+            for player_id, ukf in sorted(by_table[table_id]):
+                stats = ukf.get_statistics()
+                print(f"\n  Player {player_id}:")
+                print(
+                    f"    State: position={stats['state'][0]:.2f}, velocity={stats['state'][1]:.2f}"
+                )
+                print(f"    Avg bet: ${stats['avg_bet']:.2f}")
+                print(f"    Std residual: {stats['std_residual']:.2f}")
+                print(f"    Hands played: {len(stats['bet_history'])}")
 
         # Check for suspicious pairs
         suspicious_pairs = collusion_detector.get_suspicious_pairs(threshold=0.3)

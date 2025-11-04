@@ -227,17 +227,31 @@ class UnscentedKalmanFilter:
         pred_sigmas = np.zeros_like(sigmas)
         for i in range(sigmas.shape[1]):
             pred_sigmas[:, i : i + 1] = f(sigmas[:, i : i + 1], dt)
+            # Clip predicted sigma points to prevent extreme values
+            pred_sigmas[:, i : i + 1] = np.clip(pred_sigmas[:, i : i + 1], -1e5, 1e5)
 
         # Predicted state mean
         self.x = np.sum(self.Wm[None, :] * pred_sigmas, axis=1)[:, None]
+        # Clip state to reasonable range
+        self.x = np.clip(self.x, -1e5, 1e5)
 
         # Predicted covariance
         diff = pred_sigmas - self.x
         self.P = np.zeros((self.n, self.n))
         for i, w in enumerate(self.Wc):
             d = diff[:, i]
-            self.P += w * np.outer(d, d)
+            # Clip outer product to prevent overflow
+            outer = np.outer(d, d)
+            outer = np.clip(outer, -1e10, 1e10)
+            self.P += w * outer
         self.P += self.Q
+
+        # Ensure P is positive semi-definite and symmetric
+        self.P = (self.P + self.P.T) / 2  # Ensure symmetry
+        eigenvalues = np.linalg.eigvals(self.P)
+        if np.any(eigenvalues < 0):
+            # Regularize if any eigenvalues are negative
+            self.P += np.eye(self.n) * 1e-3
 
     def update(self, z, h):
         """Update with measurement z using measurement model h."""
@@ -254,28 +268,63 @@ class UnscentedKalmanFilter:
         # Innovation
         diff_z = meas_sigmas.T - z_pred
 
-        # Innovation covariance S
-        S = np.sum(self.Wc * (diff_z.flatten() ** 2)) + self.R[0, 0]
+        # Innovation covariance S (with numerical stability)
+        diff_z_squared = diff_z.flatten() ** 2
+        # Clip to prevent overflow
+        diff_z_squared = np.clip(diff_z_squared, 0, 1e10)
+        S = np.sum(self.Wc * diff_z_squared) + self.R[0, 0]
+        S = max(S, 1e-6)  # Ensure positive definite
         S = np.array([[S]])
 
         # Cross covariance Pxz
         diff_x = sigmas - self.x
         Pxz = np.zeros((self.n, 1))
         for i, w in enumerate(self.Wc):
-            Pxz += w * (diff_x[:, i : i + 1] * diff_z[i, 0])
+            diff_z_val = diff_z[i, 0]
+            # Clip to prevent overflow
+            if abs(diff_z_val) > 1e5:
+                diff_z_val = np.sign(diff_z_val) * 1e5
+            Pxz += w * (diff_x[:, i : i + 1] * diff_z_val)
 
         # Kalman gain K
-        K = Pxz @ np.linalg.inv(S)
+        try:
+            K = Pxz @ np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            # Fallback if S is singular
+            K = Pxz / S[0, 0]
 
         # Update state
         z_array = np.array([[z]])
-        self.x = self.x + K @ (z_array - z_pred)
+        innovation = z_array - z_pred
+        state_update = K @ innovation
 
-        # Update covariance
-        self.P = self.P - K @ S @ K.T
+        # Clip state update to prevent extreme changes
+        state_update = np.clip(state_update, -1e3, 1e3)
+        self.x = self.x + state_update
+
+        # Clip state values to reasonable range
+        self.x = np.clip(self.x, -1e5, 1e5)
+
+        # Update covariance with numerical stability
+        try:
+            cov_update = K @ S @ K.T
+            # Ensure covariance update doesn't make P negative definite
+            self.P = self.P - cov_update
+            # Regularize P to ensure positive semi-definite
+            self.P = (self.P + self.P.T) / 2  # Ensure symmetry
+            eigenvalues = np.linalg.eigvals(self.P)
+            if np.any(eigenvalues < 0):
+                # Add regularization if any eigenvalues are negative
+                self.P += np.eye(self.n) * 1e-3
+        except (np.linalg.LinAlgError, OverflowError):
+            # Reset covariance if update fails
+            self.P = np.eye(self.n) * 10
 
         # Return innovation for anomaly detection
-        return float((z_array - z_pred)[0, 0]), float(S[0, 0])
+        innovation_val = float(innovation[0, 0])
+        # Clip innovation to reasonable range
+        innovation_val = np.clip(innovation_val, -1e6, 1e6)
+        return innovation_val, float(S[0, 0])
 
     def get_state(self):
         """Return current state."""
@@ -313,6 +362,9 @@ class PokerUKF:
         self.residual_history = deque(maxlen=20)
         self.bet_history = deque(maxlen=20)
 
+        # Warm-up period: need at least 5 samples before flagging anomalies
+        self.min_samples_for_detection = 5
+
     def process_event(self, event):
         """
         Process a poker action event and return estimates and residuals.
@@ -336,12 +388,44 @@ class PokerUKF:
         # Calculate time delta
         dt = event["timestamp"] - self.last_ts
         dt = max(dt, 0.01)  # Avoid zero dt
+        dt = min(dt, 100.0)  # Cap maximum dt to prevent extreme predictions
+
+        # Check for numerical issues before processing
+        state = self.ukf.get_state()
+        if np.any(np.isnan(state)) or np.any(np.isinf(state)):
+            # Reset filter if state is invalid
+            self.ukf.x = np.array([[0.0], [1.0]])
+            self.ukf.P = np.eye(2) * 10
+            self.last_ts = event["timestamp"]
+            return {
+                "estimate": 0.0,
+                "residual": 0.0,
+                "action": event["action"],
+                "innovation_std": 1.0,
+            }
 
         # Predict state forward
-        self.ukf.predict(self.process_model, dt)
+        try:
+            self.ukf.predict(self.process_model, dt)
+        except (OverflowError, ValueError, np.linalg.LinAlgError):
+            # Reset filter on numerical error
+            self.ukf.x = np.array([[0.0], [1.0]])
+            self.ukf.P = np.eye(2) * 10
+            self.last_ts = event["timestamp"]
+            return {
+                "estimate": 0.0,
+                "residual": 0.0,
+                "action": event["action"],
+                "innovation_std": 1.0,
+            }
+
+        # Get estimate and check for validity
+        estimate = float(self.ukf.get_state()[0])
+        if np.isnan(estimate) or np.isinf(estimate):
+            estimate = 0.0
 
         result = {
-            "estimate": float(self.ukf.get_state()[0]),
+            "estimate": estimate,
             "residual": 0.0,
             "action": event["action"],
             "innovation_std": 1.0,
@@ -352,32 +436,116 @@ class PokerUKF:
             amount = float(event["amount"])
 
             # Update filter with measurement
-            innovation, innovation_var = self.ukf.update(amount, self.measurement_model)
+            try:
+                innovation, innovation_var = self.ukf.update(
+                    amount, self.measurement_model
+                )
 
-            result["estimate"] = float(self.ukf.get_state()[0])
-            result["residual"] = abs(innovation)
-            result["innovation_std"] = np.sqrt(max(innovation_var, 0.01))
+                # Check for invalid values
+                if np.isnan(innovation) or np.isinf(innovation):
+                    innovation = 0.0
+                if np.isnan(innovation_var) or innovation_var <= 0:
+                    innovation_var = 1.0
 
-            # Track history
-            self.residual_history.append(result["residual"])
-            self.bet_history.append(amount)
+                result["estimate"] = float(self.ukf.get_state()[0])
+                if np.isnan(result["estimate"]) or np.isinf(result["estimate"]):
+                    result["estimate"] = 0.0
+
+                result["residual"] = abs(innovation)
+                result["innovation_std"] = np.sqrt(max(innovation_var, 0.01))
+
+                # Track history (only if valid)
+                # For extreme values, use a capped version to prevent filter from adapting too quickly
+                if not (np.isnan(result["residual"]) or np.isinf(result["residual"])):
+                    # Cap residual for history tracking to prevent extreme outliers from skewing stats
+                    # But still use actual residual for anomaly detection
+                    if len(self.residual_history) > 0:
+                        median_residual = np.median(list(self.residual_history))
+                        # Cap at 5x median to prevent single outlier from dominating
+                        capped_residual = min(result["residual"], median_residual * 5)
+                        self.residual_history.append(capped_residual)
+                    else:
+                        self.residual_history.append(result["residual"])
+
+                    # Track bet amount (cap extreme bets for history to prevent adaptation)
+                    if len(self.bet_history) > 0:
+                        median_bet = np.median(list(self.bet_history))
+                        # Cap at 3x median for history tracking
+                        capped_bet = (
+                            min(amount, median_bet * 3) if median_bet > 0 else amount
+                        )
+                        self.bet_history.append(capped_bet)
+                    else:
+                        self.bet_history.append(amount)
+            except (OverflowError, ValueError, np.linalg.LinAlgError):
+                # If update fails, use prediction only
+                result["residual"] = abs(amount - estimate)
+                result["innovation_std"] = 1.0
 
         # Update timestamp
         self.last_ts = event["timestamp"]
 
         return result
 
-    def get_adaptive_threshold(self, default_std=2.0):
+    def get_adaptive_threshold(self, default_std=2.0, sigma_multiplier=5.0):
         """
         Calculate adaptive threshold based on historical residuals.
-        Returns 3 * std_dev of residuals.
+        Uses robust statistics (median and IQR) to avoid outliers skewing the threshold.
+        Returns 5 * std_dev of residuals (increased from 3σ to 4σ to 5σ to reduce false positives), but with better outlier resistance.
+
+        Parameters:
+            default_std: Default standard deviation for early samples
+            sigma_multiplier: Multiplier for standard deviation (default: 5.0 for 5σ threshold)
         """
         if len(self.residual_history) < 3:
-            return 3 * default_std
+            return sigma_multiplier * default_std
 
         residuals = np.array(list(self.residual_history))
-        std = np.std(residuals)
-        return 3 * max(std, 0.5)  # Minimum threshold
+
+        # Use robust statistics: median and IQR instead of mean/std
+        # This prevents outliers from inflating the threshold
+        median_residual = np.median(residuals)
+        q75 = np.percentile(residuals, 75)
+        q25 = np.percentile(residuals, 25)
+        iqr = q75 - q25
+
+        # Use IQR-based std estimate (more robust than std)
+        # IQR ≈ 1.35 * std for normal distributions
+        robust_std = iqr / 1.35 if iqr > 0 else np.std(residuals)
+
+        # Also compute traditional std as fallback
+        traditional_std = np.std(residuals)
+
+        # Use the smaller of the two to avoid over-inflating threshold
+        # But ensure minimum threshold
+        std = min(robust_std, traditional_std)
+
+        # Minimum threshold based on typical bet sizes
+        # Don't let threshold go below reasonable minimum (e.g., 10% of typical bet)
+        avg_bet = np.mean(self.bet_history) if self.bet_history else 20.0
+        min_threshold = max(0.5, avg_bet * 0.1)  # At least 10% of average bet
+
+        return max(sigma_multiplier * max(std, 0.5), min_threshold)
+
+    def is_warm_up_complete(self):
+        """Check if we have enough samples to start anomaly detection."""
+        return len(self.residual_history) >= self.min_samples_for_detection
+
+    def get_absolute_bet_threshold(self):
+        """
+        Get absolute bet size threshold for detecting unusually large bets.
+        Returns threshold based on historical bet sizes.
+        """
+        if len(self.bet_history) < 3:
+            return 50.0  # Default threshold for large bets
+
+        bet_amounts = np.array(list(self.bet_history))
+        median_bet = np.median(bet_amounts)
+        q75_bet = np.percentile(bet_amounts, 75)
+
+        # Large bet threshold: 3x the 75th percentile or 2x median, whichever is larger
+        threshold = max(3 * q75_bet, 2 * median_bet, 50.0)
+        return threshold
 
     def get_statistics(self):
         """Return player statistics for monitoring."""
