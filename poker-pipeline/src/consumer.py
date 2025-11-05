@@ -3,6 +3,8 @@ Kafka consumer with UKF-based anomaly detection for poker collusion.
 Processes streaming poker events and flags suspicious betting patterns.
 """
 
+import os
+
 from src.config import (
     KAFKA_DEFAULT_BOOTSTRAP_SERVERS,
     KAFKA_DEFAULT_TOPIC,
@@ -107,10 +109,19 @@ def consume_and_detect(
         print(f"Players tracked: {stats['players_tracked']}")
         print(f"Time elapsed: {stats['elapsed_time']:.2f}s")
         print(f"Events/sec: {stats['events_per_sec']:.2f}")
-        print(f"\nLog files created:")
+
+        existing_logs = []
         for table_id in sorted(event_processor.active_players_by_table.keys()):
-            log_file = f"{log_dir}/table_{table_id}.log"
-            print(f"  - {log_file}")
+            log_file = os.path.join(log_dir, f"table_{table_id}.log")
+            if os.path.exists(log_file):
+                existing_logs.append(log_file)
+
+        if existing_logs:
+            print("\nLog files created:")
+            for log_file in existing_logs:
+                print(f"  - {log_file}")
+        else:
+            print("\nNo anomaly log files were created.")
         print("=" * 60)
 
         # Print anomaly summary

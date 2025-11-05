@@ -125,13 +125,15 @@ class EventProcessor:
         is_anomaly = residual_anomaly or absolute_bet_anomaly
 
         # Determine anomaly type
-        anomaly_type = "high_residual"
+        anomaly_type = "none"
         if absolute_bet_anomaly and residual_anomaly:
             anomaly_type = "large_bet_high_residual"
         elif absolute_bet_anomaly:
             anomaly_type = "large_bet"
             # Use absolute bet threshold as the threshold for logging
             threshold = player_ukf.get_absolute_bet_threshold()
+        elif residual_anomaly:
+            anomaly_type = "high_residual"
 
         # Log if anomaly detected
         if is_anomaly:
