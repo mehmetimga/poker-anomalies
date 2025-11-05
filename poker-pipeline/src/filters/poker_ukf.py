@@ -34,6 +34,7 @@ from src.config import (
     ABSOLUTE_BET_THRESHOLD_DEFAULT,
     ABSOLUTE_BET_Q75_MULTIPLIER,
     ABSOLUTE_BET_MEDIAN_MULTIPLIER,
+    ABSOLUTE_BET_CAP_MULTIPLIER,
     TRACKED_ACTIONS,
     MIN_INNOVATION_VARIANCE,
 )
@@ -214,11 +215,11 @@ class PokerUKF:
         """
         Calculate adaptive threshold based on historical residuals.
         Uses robust statistics (median and IQR) to avoid outliers skewing the threshold.
-        Returns 5 * std_dev of residuals (increased from 3σ to 4σ to 5σ to reduce false positives), but with better outlier resistance.
+        Returns sigma_multiplier * std_dev of residuals with robust statistics.
 
         Parameters:
             default_std: Default standard deviation for early samples (default: from config)
-            sigma_multiplier: Multiplier for standard deviation (default: from config, 5σ threshold)
+            sigma_multiplier: Multiplier for standard deviation (default: from config)
         """
         if default_std is None:
             default_std = DEFAULT_STD
@@ -270,14 +271,24 @@ class PokerUKF:
         bet_amounts = np.array(list(self.bet_history))
         median_bet = np.median(bet_amounts)
         q75_bet = np.percentile(bet_amounts, 75)
+        q90_bet = np.percentile(bet_amounts, 90)
 
-        # Large bet threshold: multiplier x the 75th percentile or multiplier x median, whichever is larger
-        threshold = max(
+        # Base threshold from robust statistics
+        threshold_candidates = [
+            ABSOLUTE_BET_THRESHOLD_DEFAULT,
             ABSOLUTE_BET_Q75_MULTIPLIER * q75_bet,
             ABSOLUTE_BET_MEDIAN_MULTIPLIER * median_bet,
-            ABSOLUTE_BET_THRESHOLD_DEFAULT,
-        )
-        return threshold
+        ]
+        threshold = max(threshold_candidates)
+
+        # Cap threshold so it cannot grow far beyond recent high-percentile bets
+        if q90_bet > 0:
+            cap_floor = q90_bet + MIN_THRESHOLD_BASE
+            cap_scaled = q90_bet * ABSOLUTE_BET_CAP_MULTIPLIER
+            threshold = min(threshold, max(cap_floor, cap_scaled))
+
+        threshold = max(threshold, ABSOLUTE_BET_THRESHOLD_DEFAULT)
+        return float(threshold)
 
     def get_statistics(self):
         """Return player statistics for monitoring."""

@@ -35,11 +35,11 @@ DEFAULT_LOG_DIR = "logs"
 # ============================================================================
 
 # Collusion detection thresholds
-MIN_BET_FOR_COLLUSION = 30.0  # Minimum bet size (dollars) to trigger collusion alerts
+MIN_BET_FOR_COLLUSION = 20.0  # Minimum bet size (dollars) to trigger collusion alerts
 BET_SIZE_SIMILARITY_THRESHOLD = (
-    0.05  # Bet amounts must be within 5% to be considered matching
+    0.08  # Bet amounts must be within 8% to be considered matching
 )
-COLLUSION_WINDOW = 5.0  # Time window (seconds) for detecting collusion patterns
+COLLUSION_WINDOW = 6.0  # Time window (seconds) for detecting collusion patterns
 TIGHT_COLLUSION_WINDOW = 1.0  # Tight window for very synchronized bets (seconds)
 SUSPICIOUS_SEQUENCE_TIME_DIFF = (
     2.0  # Max time difference for suspicious bet-raise sequences (seconds)
@@ -51,7 +51,7 @@ RECENT_ACTIONS_MAXLEN = 10  # Maximum number of recent actions to track per tabl
 
 # Significant anomaly filtering
 MIN_RESIDUAL_MULTIPLIER = (
-    2.0  # Multiplier for threshold to determine "very high residual"
+    1.5  # Multiplier for threshold to determine "very high residual"
 )
 
 # Collusion detector
@@ -88,8 +88,8 @@ MIN_SAMPLES_FOR_THRESHOLD = 3  # Minimum samples needed for threshold calculatio
 MIN_SAMPLES_FOR_ABSOLUTE_BET = 3  # Minimum samples needed for absolute bet threshold
 
 # Adaptive threshold calculation
-DEFAULT_STD = 2.0  # Default standard deviation for early samples
-SIGMA_MULTIPLIER = 5.0  # Multiplier for standard deviation (5σ threshold)
+DEFAULT_STD = 1.5  # Default standard deviation for early samples
+SIGMA_MULTIPLIER = 3.5  # Multiplier for standard deviation (tuned 3.5σ threshold)
 MIN_THRESHOLD_BASE = 0.5  # Minimum threshold base value
 MIN_THRESHOLD_PCT = 0.1  # Minimum threshold as percentage of average bet (10%)
 DEFAULT_AVG_BET = 20.0  # Default average bet for threshold calculation
@@ -104,9 +104,10 @@ MIN_DT = 0.01  # Minimum time delta to avoid zero (seconds)
 MAX_DT = 100.0  # Maximum time delta to prevent extreme predictions (seconds)
 
 # Absolute bet threshold
-ABSOLUTE_BET_THRESHOLD_DEFAULT = 50.0  # Default threshold for large bets
-ABSOLUTE_BET_Q75_MULTIPLIER = 3.0  # 3x 75th percentile
-ABSOLUTE_BET_MEDIAN_MULTIPLIER = 2.0  # 2x median
+ABSOLUTE_BET_THRESHOLD_DEFAULT = 40.0  # Default threshold for large bets
+ABSOLUTE_BET_Q75_MULTIPLIER = 2.0  # Multiplier for 75th percentile
+ABSOLUTE_BET_MEDIAN_MULTIPLIER = 1.5  # Multiplier for median
+ABSOLUTE_BET_CAP_MULTIPLIER = 1.25  # Cap threshold at 125% of recent 90th percentile
 
 # Actions configuration
 TRACKED_ACTIONS = ["bet", "raise", "call"]  # Actions to track in filter updates

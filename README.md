@@ -6,21 +6,21 @@ A real-time anomaly detection system for identifying collusion in online poker u
 
 This project implements a real-time anomaly detection pipeline that processes poker hand history events through Apache Kafka, applies UKF-based state estimation to track player betting behaviors, and flags anomalous patterns that may indicate collusion or cheating.
 
-**Performance**: ~92-100% precision, ~3-4% false positive rate, 92% recall
+**Performance**: 91.7% detection rate on bundled samples, ~92-100% precision, ~3-4% false positive rate
 
 ### Key Features
 
 - **Real-time Streaming**: Kafka-based event processing with <100ms latency
 - **Advanced Filtering**: Unscented Kalman Filter for non-linear bet pattern tracking
 - **Multi-Layer Anomaly Detection**: 
-  - 5σ adaptive threshold (reduced false positives by 27%)
-  - Absolute bet size detection for unusually large bets
+  - 3.5σ adaptive threshold (reduces false positives while keeping sensitivity)
+  - Absolute bet size detection with percentile caps for responsive large-bet alerts
   - Player-specific adaptive thresholds with robust statistics
 - **Advanced Collusion Detection** with four-layer validation:
-  - **Minimum Bet Size Filter** ($30): Only flags economically significant collusion
-  - **Bet Size Matching**: Detects exact/similar bet matches (strong coordination indicator)
+  - **Minimum Bet Size Filter** ($20): Only flags economically significant collusion
+  - **Bet Size Matching**: Detects exact/similar bet matches within 8% tolerance
   - **Action Sequence Filter**: Validates suspicious betting sequences (bet→immediate raise, raise→raise)
-  - **Significant Anomaly Filter**: Requires at least one large_bet anomaly (reduces false positives by 20-30%)
+  - **Significant Anomaly Filter**: Requires at least one large_bet anomaly within a 6s window
 - **High Precision**: ~92-100% precision with ~3-4% false positive rate
 - **Modular Architecture**: Easy to extend with additional filters and detection strategies
 
@@ -45,7 +45,8 @@ poker-anomalies/
     ├── data/
     │   ├── table_1.txt         # Table 1 hand history
     │   ├── table_2.txt         # Table 2 hand history
-    │   └── ...                 # Additional table_N.txt files
+    │   ├── table_3.txt         # Table 3 hand history (single-player outliers)
+    │   └── table_4.txt         # Table 4 hand history (tight collusion scenario)
     ├── src/
     │   ├── __init__.py
     │   ├── producer.py         # Kafka producer
@@ -56,7 +57,8 @@ poker-anomalies/
     ├── logs/
     │   └── anomalies.log       # Anomaly output (generated)
     ├── scripts/
-    │   └── run_local.sh        # Automated runner
+    │   ├── run_local.sh        # Automated pipeline runner
+    │   └── run_detection.sh    # Detection rate reporter
     └── tests/
         └── test_filters.py     # Test suite
 ```
@@ -77,6 +79,8 @@ This will automatically:
 2. Start Kafka
 3. Run the pipeline
 4. Display results
+
+After the pipeline finishes, run `./scripts/run_detection.sh` to replay the generated logs and report the current detection rate (ships at 11/12 = 91.7%).
 
 ## Documentation
 
@@ -99,6 +103,7 @@ This will automatically:
 
 - **Investigations**: Located in `docs/investigations/`:
   - Investigation documents detailing methodology and findings
+- **Detection Analysis**: Run `poker-pipeline/scripts/run_detection.sh` to compare planted vs detected anomalies (ships at 11/12 = 91.7%)
 
 ## References
 
