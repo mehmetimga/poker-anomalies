@@ -10,8 +10,13 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import numpy as np
-from filters import SimpleKalmanFilter, KalmanFilter, UnscentedKalmanFilter, PokerUKF
-from models import process_model, measurement_model
+from src.filters import (
+    SimpleKalmanFilter,
+    KalmanFilter,
+    UnscentedKalmanFilter,
+    PokerUKF,
+)
+from src.models import process_model, measurement_model
 
 
 def test_simple_kalman():
@@ -188,9 +193,9 @@ def test_anomaly_detection():
     print("TEST 5: Anomaly Detection with Collusion Pattern")
     print("=" * 60)
 
-    from anomaly_logger import AnomalyLogger
+    from src.anomaly_logger import AnomalyLogger
 
-    logger = AnomalyLogger(log_file="logs/test_anomalies.log", console_output=False)
+    logger = AnomalyLogger(log_dir="logs", console_output=False)
 
     # Create two player UKFs
     player1 = PokerUKF("P1", process_model, measurement_model)

@@ -6,101 +6,50 @@ Supports multiple table files (table_*.txt) in the data directory.
 
 import json
 import time
-import sys
 import os
-import glob
-from pathlib import Path
-from kafka import KafkaProducer
-from kafka.errors import NoBrokersAvailable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
-
-def parse_hand_line(line):
-    """
-    Parse a line from hand history file.
-
-    Format: timestamp|table_id|player_id|action|amount|pot
-
-    Parameters:
-        line: Raw line from file
-
-    Returns:
-        dict: Parsed event or None if invalid
-    """
-    # Skip comments and empty lines
-    line = line.strip()
-    if not line or line.startswith("#"):
-        return None
-
-    parts = line.split("|")
-    if len(parts) != 6:
-        return None
-
-    try:
-        ts, table, player, action, amount, pot = parts
-        return {
-            "timestamp": float(ts),
-            "table_id": int(table),
-            "player_id": player,
-            "action": action,
-            "amount": float(amount),
-            "pot": float(pot),
-        }
-    except ValueError as e:
-        print(f"Error parsing line: {line} - {e}")
-        return None
-
-
-def create_producer(bootstrap_servers="localhost:9092", max_retries=10, retry_delay=2):
-    """
-    Create Kafka producer with retry logic.
-
-    Parameters:
-        bootstrap_servers: Kafka broker address
-        max_retries: Maximum connection attempts
-        retry_delay: Seconds between retries
-
-    Returns:
-        KafkaProducer instance
-    """
-    for attempt in range(max_retries):
-        try:
-            producer = KafkaProducer(
-                bootstrap_servers=bootstrap_servers,
-                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-                acks="all",
-                retries=3,
-            )
-            print(f"✓ Connected to Kafka at {bootstrap_servers}")
-            return producer
-        except NoBrokersAvailable:
-            if attempt < max_retries - 1:
-                print(
-                    f"⚠️  Kafka not available, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})"
-                )
-                time.sleep(retry_delay)
-            else:
-                print(f"✗ Failed to connect to Kafka after {max_retries} attempts")
-                raise
+from src.config import (
+    MAX_WORKERS_LIMIT,
+    KAFKA_DEFAULT_BOOTSTRAP_SERVERS,
+    KAFKA_DEFAULT_TOPIC,
+    PRODUCER_DEFAULT_DELAY,
+    PRODUCER_SEND_TIMEOUT,
+    PRODUCER_PROGRESS_INTERVAL,
+)
+from src.kafka_utils import create_producer_with_retry
+from src.file_utils import find_table_files, get_effective_workers
+from src.parser import parse_hand_line
 
 
 def produce_events_from_file(
-    input_file, producer, topic, delay, events_sent, events_failed
+    input_file,
+    producer,
+    topic,
+    delay,
+    events_counter,
+    events_failed_counter,
+    print_lock,
 ):
     """
     Read a single hand history file and produce events to Kafka.
+    Thread-safe version for parallel processing.
 
     Parameters:
         input_file: Path to hand history file
-        producer: KafkaProducer instance
+        producer: KafkaProducer instance (thread-safe)
         topic: Kafka topic name
         delay: Delay between events (seconds) to simulate real-time
-        events_sent: Current count of events sent (will be updated)
-        events_failed: Current count of events failed (will be updated)
+        events_counter: Thread-safe counter for events sent (list with single int)
+        events_failed_counter: Thread-safe counter for events failed (list with single int)
+        print_lock: Lock for thread-safe printing
 
     Returns:
-        tuple: (events_sent, events_failed) - updated counts
+        tuple: (file_events_sent, file_events_failed) - counts for this file only
     """
     file_events = 0
+    file_failed = 0
     try:
         with open(input_file, "r") as f:
             for line_num, line in enumerate(f, 1):
@@ -114,36 +63,48 @@ def produce_events_from_file(
                     future = producer.send(topic, value=event)
 
                     # Wait for send to complete (optional, for debugging)
-                    record_metadata = future.get(timeout=10)
+                    record_metadata = future.get(timeout=PRODUCER_SEND_TIMEOUT)
 
-                    events_sent += 1
-                    file_events += 1
+                    # Thread-safe counter update
+                    with print_lock:
+                        events_counter[0] += 1
+                        events_sent = events_counter[0]
+                        file_events += 1
 
-                    # Print progress
-                    if events_sent % 10 == 0:
-                        print(
-                            f"Sent {events_sent} events... (latest: {event['player_id']} {event['action']} ${event['amount']:.2f} from {os.path.basename(input_file)})"
-                        )
+                        # Print progress
+                        if events_sent % PRODUCER_PROGRESS_INTERVAL == 0:
+                            print(
+                                f"Sent {events_sent} events... (latest: {event['player_id']} {event['action']} ${event['amount']:.2f} from {os.path.basename(input_file)})"
+                            )
 
                     # Simulate real-time delay
                     time.sleep(delay)
 
                 except Exception as e:
-                    events_failed += 1
-                    print(
-                        f"✗ Error sending event from {input_file} line {line_num}: {e}"
-                    )
+                    with print_lock:
+                        events_failed_counter[0] += 1
+                        file_failed += 1
+                        print(
+                            f"✗ Error sending event from {input_file} line {line_num}: {e}"
+                        )
 
-        print(f"✓ Processed {file_events} events from {os.path.basename(input_file)}")
+        with print_lock:
+            print(
+                f"✓ Processed {file_events} events from {os.path.basename(input_file)}"
+            )
 
     except FileNotFoundError:
-        print(f"✗ Error: Input file not found: {input_file}")
-        events_failed += 1
+        with print_lock:
+            events_failed_counter[0] += 1
+            file_failed += 1
+            print(f"✗ Error: Input file not found: {input_file}")
     except Exception as e:
-        print(f"✗ Error reading file {input_file}: {e}")
-        events_failed += 1
+        with print_lock:
+            events_failed_counter[0] += 1
+            file_failed += 1
+            print(f"✗ Error reading file {input_file}: {e}")
 
-    return events_sent, events_failed
+    return file_events, file_failed
 
 
 def produce_events(
@@ -152,6 +113,7 @@ def produce_events(
     topic="poker-actions",
     delay=0.5,
     bootstrap_servers="localhost:9092",
+    max_workers=1,
 ):
     """
     Read hand history files and produce events to Kafka.
@@ -165,76 +127,90 @@ def produce_events(
         topic: Kafka topic name
         delay: Delay between events (seconds) to simulate real-time
         bootstrap_servers: Kafka broker address
+        max_workers: Maximum number of threads for parallel processing (default: 1, sequential)
+                     Set to None or number of files for full parallelism
     """
     print(f"Starting Kafka Producer")
     print(f"Topic: {topic}")
     print(f"Delay: {delay}s per event")
+
+    # Calculate effective workers (capped at MAX_WORKERS_LIMIT)
+    effective_workers = get_effective_workers(max_workers, MAX_WORKERS_LIMIT)
+
+    if effective_workers > 1:
+        print(
+            f"Parallel processing: {effective_workers} threads (max limit: {MAX_WORKERS_LIMIT})"
+        )
+        if max_workers and max_workers > MAX_WORKERS_LIMIT:
+            print(
+                f"  Note: Requested {max_workers} threads, capped at {MAX_WORKERS_LIMIT}"
+            )
+    else:
+        print(f"Sequential processing")
     print("-" * 60)
 
     # Create producer with retry logic
-    producer = create_producer(bootstrap_servers)
+    # Note: KafkaProducer is thread-safe, so we can share it across threads
+    producer = create_producer_with_retry(bootstrap_servers)
 
-    events_sent = 0
-    events_failed = 0
+    # Thread-safe counters (using lists so they're mutable across threads)
+    events_counter = [0]
+    events_failed_counter = [0]
+    print_lock = Lock()
 
     try:
-        # Determine which files to process
-        files_to_process = []
-
-        if input_file:
-            # Single file mode (backward compatibility)
-            if os.path.exists(input_file):
-                files_to_process = [input_file]
-                print(f"Processing single file: {input_file}")
-            else:
-                print(f"✗ Error: Input file not found: {input_file}")
-                sys.exit(1)
-        elif data_dir:
-            # Directory mode - find all table_*.txt files
-            data_path = Path(data_dir)
-            if not data_path.exists():
-                print(f"✗ Error: Data directory not found: {data_dir}")
-                sys.exit(1)
-
-            # Find all files matching table_*.txt pattern
-            pattern = str(data_path / "table_*.txt")
-            files_to_process = sorted(glob.glob(pattern))
-
-            if not files_to_process:
-                print(f"⚠️  No table_*.txt files found in {data_dir}")
-                print(f"   Looking for files matching: {pattern}")
-                sys.exit(1)
-
-            print(f"Found {len(files_to_process)} table file(s):")
-            for f in files_to_process:
-                print(f"  - {os.path.basename(f)}")
-        else:
-            # Default: look in data/ directory relative to script location
-            script_dir = Path(__file__).parent.parent
-            default_data_dir = script_dir / "data"
-            pattern = str(default_data_dir / "table_*.txt")
-            files_to_process = sorted(glob.glob(pattern))
-
-            if not files_to_process:
-                print(f"✗ Error: No table_*.txt files found in {default_data_dir}")
-                print(
-                    f"   Please provide --input or --data-dir, or add table_*.txt files to data/"
-                )
-                sys.exit(1)
-
-            print(
-                f"Found {len(files_to_process)} table file(s) in default data directory:"
-            )
-            for f in files_to_process:
-                print(f"  - {os.path.basename(f)}")
-
+        # Find files to process using utility function
+        files_to_process, info_message = find_table_files(data_dir, input_file)
+        print(info_message)
         print("-" * 60)
 
-        # Process each file
-        for input_file in files_to_process:
-            events_sent, events_failed = produce_events_from_file(
-                input_file, producer, topic, delay, events_sent, events_failed
-            )
+        # Process files - either sequentially or in parallel
+        if effective_workers > 1 and len(files_to_process) > 1:
+            # Parallel processing
+            # ThreadPoolExecutor automatically queues tasks when there are more files than workers
+            # So if we have 6 files and 4 workers, 2 files will wait in queue until a worker is free
+            if len(files_to_process) > effective_workers:
+                print(
+                    f"Processing {len(files_to_process)} files with {effective_workers} threads "
+                    f"(files will be queued as threads become available)"
+                )
+            with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                # Submit all file processing tasks
+                future_to_file = {
+                    executor.submit(
+                        produce_events_from_file,
+                        input_file,
+                        producer,
+                        topic,
+                        delay,
+                        events_counter,
+                        events_failed_counter,
+                        print_lock,
+                    ): input_file
+                    for input_file in files_to_process
+                }
+
+                # Wait for all tasks to complete
+                for future in as_completed(future_to_file):
+                    file = future_to_file[future]
+                    try:
+                        file_events, file_failed = future.result()
+                    except Exception as e:
+                        with print_lock:
+                            print(f"✗ File {file} generated an exception: {e}")
+                            events_failed_counter[0] += 1
+        else:
+            # Sequential processing (backward compatible)
+            for input_file in files_to_process:
+                produce_events_from_file(
+                    input_file,
+                    producer,
+                    topic,
+                    delay,
+                    events_counter,
+                    events_failed_counter,
+                    print_lock,
+                )
 
         # Send END_STREAM signal
         end_event = {"type": "END_STREAM", "timestamp": time.time()}
@@ -244,8 +220,8 @@ def produce_events(
         print("\n" + "-" * 60)
         print(f"✓ Producer finished")
         print(f"  Files processed: {len(files_to_process)}")
-        print(f"  Events sent: {events_sent}")
-        print(f"  Events failed: {events_failed}")
+        print(f"  Events sent: {events_counter[0]}")
+        print(f"  Events failed: {events_failed_counter[0]}")
         print(f"  END_STREAM signal sent")
         print("-" * 60)
 
@@ -273,19 +249,25 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--topic",
-        default="poker-actions",
-        help="Kafka topic name (default: poker-actions)",
+        default=KAFKA_DEFAULT_TOPIC,
+        help=f"Kafka topic name (default: {KAFKA_DEFAULT_TOPIC})",
     )
     parser.add_argument(
         "--delay",
         type=float,
-        default=0.5,
-        help="Delay between events in seconds (default: 0.5)",
+        default=PRODUCER_DEFAULT_DELAY,
+        help=f"Delay between events in seconds (default: {PRODUCER_DEFAULT_DELAY})",
     )
     parser.add_argument(
         "--kafka",
-        default="localhost:9092",
-        help="Kafka bootstrap servers (default: localhost:9092)",
+        default=KAFKA_DEFAULT_BOOTSTRAP_SERVERS,
+        help=f"Kafka bootstrap servers (default: {KAFKA_DEFAULT_BOOTSTRAP_SERVERS})",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=1,
+        help="Number of threads for parallel file processing (default: 1, sequential). Set to number of files or higher for full parallelism.",
     )
 
     args = parser.parse_args()
@@ -296,4 +278,5 @@ if __name__ == "__main__":
         topic=args.topic,
         delay=args.delay,
         bootstrap_servers=args.kafka,
+        max_workers=args.threads,
     )
