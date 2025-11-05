@@ -6,8 +6,19 @@ Tracks individual player anomalies and multi-player collusion patterns.
 import json
 import logging
 from collections import defaultdict, deque
-from datetime import datetime
 import os
+from src.collusion_detector import CollusionDetector
+from src.config import (
+    MIN_BET_FOR_COLLUSION,
+    BET_SIZE_SIMILARITY_THRESHOLD,
+    COLLUSION_WINDOW,
+    TIGHT_COLLUSION_WINDOW,
+    RECENT_ANOMALIES_MAXLEN,
+    RECENT_ACTIONS_MAXLEN,
+    MIN_RESIDUAL_MULTIPLIER,
+    SUSPICIOUS_SEQUENCE_TIME_DIFF,
+    SIGMA_MULTIPLIER,
+)
 
 
 class AnomalyLogger:
@@ -18,17 +29,18 @@ class AnomalyLogger:
 
     def __init__(
         self,
-        log_file="logs/anomalies.log",
+        log_dir="logs",
         console_output=True,
         collusion_detector=None,
-        min_bet_for_collusion=30.0,
-        bet_size_similarity_threshold=0.05,
+        min_bet_for_collusion=None,
+        bet_size_similarity_threshold=None,
     ):
         """
-        Initialize the anomaly logger.
+        Initialize the anomaly logger with per-table log files.
 
         Parameters:
-            log_file: Path to log file
+            log_dir: Directory for log files (default: logs/)
+                    Each table will have its own log file: table_{table_id}.log
             console_output: Whether to echo anomalies to console
             collusion_detector: Optional CollusionDetector instance to update
             min_bet_for_collusion: Minimum bet size (in dollars) to trigger collusion alerts.
@@ -38,48 +50,79 @@ class AnomalyLogger:
                                            considered matching. Default: 0.05 (5%)
                                            Lower values = stricter matching (exact or very close)
         """
-        self.log_file = log_file
+        self.log_dir = log_dir
         self.console_output = console_output
         self.collusion_detector = collusion_detector
-        self.min_bet_for_collusion = min_bet_for_collusion
-        self.bet_size_similarity_threshold = bet_size_similarity_threshold
+        self.min_bet_for_collusion = (
+            min_bet_for_collusion
+            if min_bet_for_collusion is not None
+            else MIN_BET_FOR_COLLUSION
+        )
+        self.bet_size_similarity_threshold = (
+            bet_size_similarity_threshold
+            if bet_size_similarity_threshold is not None
+            else BET_SIZE_SIMILARITY_THRESHOLD
+        )
 
         # Ensure log directory exists
-        log_dir = os.path.dirname(log_file)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir)
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
 
-        # Setup logging
-        self.logger = logging.getLogger("AnomalyLogger")
-        self.logger.setLevel(logging.INFO)
-
-        # File handler
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.INFO)
-        formatter = logging.Formatter("%(asctime)s - %(message)s")
-        file_handler.setFormatter(formatter)
-        self.logger.addHandler(file_handler)
+        # Per-table loggers: {table_id: logger}
+        self.table_loggers = {}
 
         # Track recent anomalies per table for collusion detection
         # Format: {table_id: deque([(timestamp, player_id, residual, bet_amount), ...])}
-        self.recent_anomalies = defaultdict(lambda: deque(maxlen=10))
+        self.recent_anomalies = defaultdict(
+            lambda: deque(maxlen=RECENT_ANOMALIES_MAXLEN)
+        )
 
         # Track recent actions per table for sequence analysis
         # Format: {table_id: deque([(timestamp, player_id, action), ...])}
-        self.recent_actions = defaultdict(lambda: deque(maxlen=10))
+        self.recent_actions = defaultdict(lambda: deque(maxlen=RECENT_ACTIONS_MAXLEN))
 
         # Track active players per table (for pair statistics)
         # Format: {table_id: set([player_id, ...])}
         self.active_players = defaultdict(set)
 
         # Collusion tracking window (seconds)
-        self.collusion_window = 5.0
+        self.collusion_window = COLLUSION_WINDOW
         # Tight collusion window for very synchronized bets (e.g., 0.5s apart)
-        self.tight_collusion_window = 1.0
+        self.tight_collusion_window = TIGHT_COLLUSION_WINDOW
 
         # Statistics
         self.total_anomalies = 0
         self.collusion_detected = 0
+
+    def _get_logger_for_table(self, table_id):
+        """
+        Get or create a logger for a specific table.
+
+        Parameters:
+            table_id: Table identifier
+
+        Returns:
+            logging.Logger instance for this table
+        """
+        if table_id not in self.table_loggers:
+            # Create logger for this table
+            logger_name = f"AnomalyLogger.Table{table_id}"
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(logging.INFO)
+            # Remove any existing handlers to avoid duplicates
+            logger.handlers = []
+
+            # Create log file path: table_{table_id}.log
+            log_file = os.path.join(self.log_dir, f"table_{table_id}.log")
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(logging.INFO)
+            formatter = logging.Formatter("%(asctime)s - %(message)s")
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+
+            self.table_loggers[table_id] = logger
+
+        return self.table_loggers[table_id]
 
     def track_action(self, event):
         """
@@ -124,8 +167,10 @@ class AnomalyLogger:
             "details": details,
         }
 
-        # Log to file
-        self.logger.info(json.dumps(log_entry))
+        # Log to file using table-specific logger
+        table_id = event["table_id"]
+        logger = self._get_logger_for_table(table_id)
+        logger.info(json.dumps(log_entry))
 
         # Console output
         if self.console_output:
@@ -295,8 +340,9 @@ class AnomalyLogger:
                     ]
 
                     if (
-                        len(intervening_actions) == 0 and time_diff < 2.0
-                    ):  # No intervening actions, < 2s apart
+                        len(intervening_actions) == 0
+                        and time_diff < SUSPICIOUS_SEQUENCE_TIME_DIFF
+                    ):  # No intervening actions, within threshold
                         is_suspicious = True
                         sequence_info["suspicious_patterns"].append(
                             {
@@ -340,7 +386,7 @@ class AnomalyLogger:
             return True, sequence_info
 
     def _filter_significant_anomalies(
-        self, anomalies_list, min_residual_multiplier=2.0
+        self, anomalies_list, min_residual_multiplier=None
     ):
         """
         Filter to only significant anomalies for collusion detection.
@@ -348,13 +394,16 @@ class AnomalyLogger:
 
         Parameters:
             anomalies_list: List of (timestamp, player_id, residual, bet_amount, anomaly_type, threshold) tuples
-            min_residual_multiplier: Multiplier for threshold to determine "very high residual" (default: 2.0)
+            min_residual_multiplier: Multiplier for threshold to determine "very high residual" (default: from config)
 
         Returns:
             Filtered list of significant anomalies (same format as input)
         """
         if len(anomalies_list) < 2:
             return []
+
+        if min_residual_multiplier is None:
+            min_residual_multiplier = MIN_RESIDUAL_MULTIPLIER
 
         significant = []
         for anomaly in anomalies_list:
@@ -365,7 +414,7 @@ class AnomalyLogger:
                 # Old format: (timestamp, player_id, residual, bet_amount)
                 ts, player_id, res, bet_amount = anomaly
                 anomaly_type = "high_residual"
-                threshold = res / 5.0  # Estimate threshold (assuming 5σ)
+                threshold = res / SIGMA_MULTIPLIER  # Estimate threshold (assuming 5σ)
             else:
                 # Skip unknown formats
                 continue
@@ -507,7 +556,7 @@ class AnomalyLogger:
             elif len(anomaly) == 4:
                 ts, player_id, res, bet_amount = anomaly
                 anomaly_type = "high_residual"
-                threshold = res / 5.0  # Estimate
+                threshold = res / SIGMA_MULTIPLIER  # Estimate
             else:
                 continue
             if (
@@ -524,7 +573,7 @@ class AnomalyLogger:
             elif len(anomaly) == 4:
                 ts, player_id, res, bet_amount = anomaly
                 anomaly_type = "high_residual"
-                threshold = res / 5.0  # Estimate
+                threshold = res / SIGMA_MULTIPLIER  # Estimate
             else:
                 continue
             if (
@@ -664,7 +713,7 @@ class AnomalyLogger:
                         "residual": float(res),
                         "bet_amount": float(bet_amount),
                         "anomaly_type": "high_residual",
-                        "threshold": res / 5.0,  # Estimate
+                        "threshold": res / SIGMA_MULTIPLIER,  # Estimate using config
                     }
                 )
             else:
@@ -677,7 +726,7 @@ class AnomalyLogger:
                         "residual": float(res),
                         "bet_amount": 0.0,  # Unknown bet amount in old format
                         "anomaly_type": "high_residual",
-                        "threshold": res / 5.0,  # Estimate
+                        "threshold": res / SIGMA_MULTIPLIER,  # Estimate using config
                     }
                 )
 
@@ -729,8 +778,9 @@ class AnomalyLogger:
             "details": details,
         }
 
-        # Log to file
-        self.logger.info(json.dumps(collusion_entry))
+        # Log to file using table-specific logger
+        logger = self._get_logger_for_table(table_id)
+        logger.info(json.dumps(collusion_entry))
 
         # Console output
         if self.console_output:
@@ -823,67 +873,3 @@ class AnomalyLogger:
         print(f"Collusion patterns found: {stats['collusion_detected']}")
         print(f"Tables monitored: {stats['active_tables']}")
         print("=" * 60 + "\n")
-
-
-class CollusionDetector:
-    """
-    Advanced collusion detection with pattern analysis.
-    """
-
-    def __init__(self, window_size=10):
-        """
-        Initialize collusion detector.
-
-        Parameters:
-            window_size: Number of recent hands to analyze
-        """
-        self.window_size = window_size
-
-        # Track player pairs and their correlation
-        self.player_pairs = defaultdict(
-            lambda: {"joint_anomalies": 0, "total_hands": 0, "correlation_score": 0.0}
-        )
-
-    def update_pair_statistics(self, player1, player2, both_anomalous):
-        """
-        Update statistics for a player pair.
-
-        Parameters:
-            player1: First player ID
-            player2: Second player ID
-            both_anomalous: Whether both players had anomalies
-        """
-        pair_key = tuple(sorted([player1, player2]))
-        stats = self.player_pairs[pair_key]
-
-        stats["total_hands"] += 1
-        if both_anomalous:
-            stats["joint_anomalies"] += 1
-
-        # Calculate correlation score
-        if stats["total_hands"] > 0:
-            stats["correlation_score"] = stats["joint_anomalies"] / stats["total_hands"]
-
-    def get_suspicious_pairs(self, threshold=0.3):
-        """
-        Get player pairs with high collusion correlation.
-
-        Parameters:
-            threshold: Correlation threshold for suspicion
-
-        Returns:
-            list: List of suspicious player pairs
-        """
-        suspicious = []
-        for pair, stats in self.player_pairs.items():
-            if stats["total_hands"] >= 5 and stats["correlation_score"] >= threshold:
-                suspicious.append(
-                    {
-                        "players": pair,
-                        "correlation": stats["correlation_score"],
-                        "joint_anomalies": stats["joint_anomalies"],
-                        "total_hands": stats["total_hands"],
-                    }
-                )
-
-        return sorted(suspicious, key=lambda x: x["correlation"], reverse=True)
