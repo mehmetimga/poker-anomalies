@@ -129,13 +129,13 @@ python -m src.producer \
 python -m src.consumer \
     --topic poker-actions \
     --kafka localhost:9092 \
-    --log logs/anomalies.log
+    --log-dir logs
 ```
 
 **Parameters:**
 - `--topic`: Kafka topic name (default: `poker-actions`)
 - `--kafka`: Kafka bootstrap servers (default: `localhost:9092`)
-- `--log`: Path to anomaly log file (default: `logs/anomalies.log`)
+- `--log-dir`: Directory for log files (default: `logs/`). Each table will have its own log file: `table_{table_id}.log`
 
 ## Next Steps
 
@@ -175,7 +175,3 @@ Research papers are located in `../docs/papers/`:
 - `kafka-python`: Kafka client for Python
 - `numpy`: Numerical computing
 - `scipy`: Scientific computing utilities
-
----
-
-**Ready to detect collusion? Start with: `./scripts/run_local.sh`** 🎰

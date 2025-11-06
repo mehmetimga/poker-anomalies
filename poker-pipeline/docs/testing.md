@@ -32,7 +32,7 @@ Running the pipeline should detect:
 - **All detected patterns show:**
   - Exact bet matches (e.g., $100/$100, $130/$130, $140/$140)
   - Suspicious action sequences (bet→immediate_raise, raise→raise)
-  - Economically significant bets (≥$30)
+  - Economically significant bets (≥$20)
 
 ## Validation Results
 
@@ -43,12 +43,12 @@ Running the pipeline should detect:
 
 ## Features Active
 
-- ✅ **5σ threshold**: Reduced false positives by 27%
-- ✅ **$30 minimum bet filter**: Filters small-bet false positives
-- ✅ **Bet size matching**: Detects exact/similar bet coordination
+- ✅ **3.5σ threshold**: Reduced false positives by 27%
+- ✅ **$20 minimum bet filter**: Filters small-bet false positives
+- ✅ **Bet size matching**: Detects exact/similar bet coordination (within 8%)
 - ✅ **Action sequence validation**: Confirms suspicious betting patterns
 - ✅ **Significant anomaly filter**: Requires at least one large_bet anomaly (reduces false positives by 20-30%)
 - ✅ **Warm-up period**: Prevents false positives in first 5 hands per player
-- ✅ **Absolute bet size detection**: Catches large synchronized bets
-- ✅ **Tight collusion detection**: Flags highly synchronized bets (0.5s apart)
+- ✅ **Absolute bet size detection**: Catches large synchronized bets (≥$40)
+- ✅ **Tight collusion detection**: Flags highly synchronized bets (<1s apart)
 
