@@ -38,7 +38,7 @@ JSON entries in `logs/anomalies.log`:
   "residual": 8.2,
   "threshold": 6.0,
   "type": "high_residual",
-  "details": "Deviation >5σ (threshold=6.00)"
+  "details": "Deviation >3.5σ (threshold=6.00)"
 }
 ```
 
@@ -53,8 +53,8 @@ JSON entries in `logs/anomalies.log`:
   "num_players": 2,
   "sync_level": "normal",
   "max_time_diff": 4.0,
-  "min_bet_threshold": 30.0,
-  "bet_size_similarity_threshold": 0.05,
+  "min_bet_threshold": 20.0,
+  "bet_size_similarity_threshold": 0.08,
   "bet_matching": {
     "exact_matches": [{"players": ["P1", "P3"], "bet_amount": 100.0}],
     "similar_matches": [],
@@ -76,7 +76,7 @@ JSON entries in `logs/anomalies.log`:
     {"player_id": "P1", "timestamp": 1697500280.5, "residual": 195.93, "bet_amount": 100.0, "anomaly_type": "large_bet", "threshold": 72.0},
     {"player_id": "P3", "timestamp": 1697500284.5, "residual": 185.58, "bet_amount": 100.0, "anomaly_type": "large_bet", "threshold": 80.25}
   ],
-  "details": "Synchronized betting anomaly detected among 2 players, max time diff: 4.00s, min bet: $30.00, EXACT bet matches: 1 pairs, match ratio: 100.0%, suspicious sequence: bet_immediate_raise, raise_raise"
+  "details": "Synchronized betting anomaly detected among 2 players, max time diff: 4.00s, min bet: $20.00, EXACT bet matches: 1 pairs, match ratio: 100.0%, suspicious sequence: bet_immediate_raise, raise_raise"
 }
 ```
 

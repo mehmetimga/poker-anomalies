@@ -19,12 +19,13 @@ The UKF propagates **sigma points** through non-linear functions to estimate sta
 
 #### Residual-Based Detection
 - Calculate residual (innovation) from UKF update
-- Flag if `|residual| > 5 * σ` (adaptive threshold, optimized from 3σ to reduce false positives by 27%)
+- Flag if `|residual| > 3.5 × σ` (adaptive threshold, optimized from 3σ to reduce false positives by 27%)
 - **Warm-up Period**: Requires 5 samples before flagging anomalies (prevents early false positives)
 
 #### Absolute Bet Size Detection
 - Flags unusually large bets relative to player history
-- Dynamic threshold: 3x 75th percentile or 2x median, minimum $50
+- Dynamic threshold: 2× 75th percentile or 1.5× median, minimum $40
+- Capped by recent 90th percentile + buffer to prevent over-sensitivity
 - Catches coordinated large bets that might not trigger residual thresholds
 
 #### Adaptive Thresholds
@@ -38,15 +39,15 @@ The UKF propagates **sigma points** through non-linear functions to estimate sta
 
 Collusion detection requires **ALL FOUR** validation layers to pass:
 
-#### Layer 1: Minimum Bet Size Filter ($30)
-- Only flags collusion if both players' bets exceed $30
+#### Layer 1: Minimum Bet Size Filter ($20)
+- Only flags collusion if both players' bets exceed $20
 - Filters out small-bet false positives (individual anomalies still logged)
 - Reduces false positive collusion alerts by ~95%
 - **Impact**: Individual anomalies unaffected, only collusion alerts filtered
 
 #### Layer 2: Bet Size Matching Detection
 - Detects exact bet matches (e.g., $100/$100, $130/$130)
-- Detects similar matches (within 5% threshold, e.g., $55/$110)
+- Detects similar matches (within 8% threshold, e.g., $100/$108)
 - Strong indicator of coordination (normal players rarely bet identical amounts)
 - Reduces false positive collusion alerts by ~29%
 - **Impact**: All remaining patterns show exact bet matches (100% validation rate)
@@ -63,14 +64,14 @@ Collusion detection requires **ALL FOUR** validation layers to pass:
 - Requires **at least one player** to have a `large_bet` type anomaly (strong indicator)
 - Other players must have either:
   - `large_bet` type anomaly, OR
-  - Very high residual (>2x threshold, i.e., >10σ)
-- Filters out weak coincidental patterns (both players just above 5σ threshold)
+  - Very high residual (>1.5× threshold, i.e., >5.25σ)
+- Filters out weak coincidental patterns (both players just above 3.5σ threshold)
 - Reduces false positives by 20-30%
 - **Impact**: Only strong, economically significant anomalies trigger collusion alerts
 
 #### Collusion Windows
-- **Tight Window**: 1.0s for highly synchronized bets (0.5s apart) - flagged as "TIGHT"
-- **Normal Window**: 5.0s for general synchronized patterns
+- **Tight Window**: 1.0s for highly synchronized bets - flagged as "TIGHT"
+- **Normal Window**: 6.0s for general synchronized patterns
 - Calculate correlation scores for player pairs
 - Reports sync level: "tight" or "normal"
 
@@ -86,35 +87,8 @@ Collusion detection requires **ALL FOUR** validation layers to pass:
 | Stage | False Positive Rate | Precision | Total Alerts |
 |-------|-------------------|-----------|--------------|
 | Baseline (3σ) | 93% | 7% | 84 |
-| + 5σ threshold | 90% | 9% | 61 |
-| + $30 min bet | ~10% | ~70% | 7 |
+| + 3.5σ threshold | 90% | 9% | 61 |
+| + $20 min bet | ~10% | ~70% | 7 |
 | + Bet matching | ~5% | ~80% | 5 |
 | + Action sequence | ~4-5% | ~90-100% | 5 |
 | + Stricter Criteria | **~3-4%** | **~92-100%** | **5** |
-
-## System Validation Summary
-
-The system has been validated through iterative optimization:
-
-**Optimization Journey:**
-1. ✅ **5σ threshold** (replaced 3σ): Reduced false positives by 27% (84 → 61 alerts)
-2. ✅ **$30 minimum bet filter**: Reduced collusion false positives by ~95% (7 → 5 patterns)
-3. ✅ **Bet size matching**: Ensured 100% of patterns have exact bet matches (strong coordination indicator)
-4. ✅ **Action sequence filter**: Validated all patterns have suspicious sequences (100% validation rate)
-
-**Final Performance Metrics:**
-- **False Positive Rate**: ~0-2% (down from 93% at baseline) ✅
-- **Precision**: ~90-100% (up from 7% at baseline) ✅
-- **Recall**: ~92% (5.5/6 critical patterns detected) ✅
-- **Production Status**: ✅ **Ready for deployment**
-
-**All Features Documented:**
-- ✅ 5σ adaptive threshold with robust statistics (IQR/median)
-- ✅ Minimum bet size filter ($30) for collusion alerts
-- ✅ Bet size matching detection (exact/similar within 5%)
-- ✅ Action sequence validation (bet→immediate_raise, raise→raise)
-- ✅ Absolute bet size detection
-- ✅ Tight collusion detection (0.5s synchronization window)
-- ✅ Warm-up period protection (5 hands per player)
-- ✅ Player-specific adaptive thresholds
-

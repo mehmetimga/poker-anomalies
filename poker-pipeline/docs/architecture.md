@@ -4,14 +4,14 @@
 
 ```
 ┌─────────────────┐      ┌──────────────┐      ┌────────────────────┐
-│  Hand History   │────▶│    Kafka     │────▶│  UKF Consumer      │
+│  Hand History   │────▶ │    Kafka     │────▶ │  UKF Consumer      │
 │  (Producer)     │      │    Topic     │      │  + Anomaly Logger  │
 └─────────────────┘      └──────────────┘      └────────────────────┘
                                                        │
                                                        ▼
-                                               ┌────────────────┐
-                                               │  anomalies.log │
-                                               └────────────────┘
+                                              ┌──────────────────┐
+                                              │ logs/table_*.log │
+                                              └──────────────────┘
 ```
 
 ## State Estimation
@@ -36,5 +36,5 @@ z = pos * exp(vel / 10)
 - **Producer**: Reads hand history files and publishes events to Kafka
 - **Kafka**: Message broker for real-time event streaming
 - **Consumer**: Processes events, applies UKF filtering, and detects anomalies
-- **Anomaly Logger**: Logs detected anomalies and collusion patterns to JSON log file
+- **Anomaly Logger**: Logs detected anomalies and collusion patterns to per-table JSON log files (`logs/table_{id}.log`)
 

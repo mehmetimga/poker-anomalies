@@ -20,9 +20,9 @@ Log file: logs/anomalies.log
 
 🚨 COLLUSION DETECTED at table 1!
    Players involved: P1, P3
-   Time window: 5.0s (normal)
+   Time window: 6.0s (normal)
    Max time difference: 4.00s
-   Min bet threshold: $30.00
+   Min bet threshold: $20.00
    ⚠️  EXACT bet matches: P1&P3: $100.00
    ⚠️  Suspicious sequence: raise→raise (P1&P3, 4.00s), bet→immediate_raise (P3&P1, 0.50s)
    Pattern: Synchronized betting
@@ -94,7 +94,7 @@ Tables monitored: 1
     {"player_id": "P1", "timestamp": 1697500280.5, "residual": 195.93, "bet_amount": 100.0, "anomaly_type": "large_bet", "threshold": 72.0},
     {"player_id": "P3", "timestamp": 1697500284.5, "residual": 185.58, "bet_amount": 100.0, "anomaly_type": "large_bet", "threshold": 80.25}
   ],
-  "details": "Synchronized betting anomaly detected among 2 players, max time diff: 4.00s, min bet: $30.00, EXACT bet matches: 1 pairs, match ratio: 100.0%, suspicious sequence: bet_immediate_raise, raise_raise"
+  "details": "Synchronized betting anomaly detected among 2 players, max time diff: 4.00s, min bet: $20.00, EXACT bet matches: 1 pairs, match ratio: 100.0%, suspicious sequence: bet_immediate_raise, raise_raise"
 }
 ```
 

@@ -55,7 +55,10 @@ poker-anomalies/
     │   ├── models.py           # Process/measurement models
     │   └── anomaly_logger.py   # Logging and alerting
     ├── logs/
-    │   └── anomalies.log       # Anomaly output (generated)
+    │   ├── table_1.log         # Table 1 anomaly output (generated)
+    │   ├── table_2.log         # Table 2 anomaly output (generated)
+    │   ├── table_3.log         # Table 3 anomaly output (generated)
+    │   └── table_4.log         # Table 4 anomaly output (generated)
     ├── scripts/
     │   ├── run_local.sh        # Automated pipeline runner
     │   └── run_detection.sh    # Detection rate reporter
@@ -141,7 +144,3 @@ For issues and questions:
 - Open a GitHub issue
 - Check the [pipeline README](poker-pipeline/README.md) troubleshooting section
 - Review investigation files in `docs/investigations/` for methodology details
-
----
-
-**Built with ❤️ for fraud detection in online gaming**
